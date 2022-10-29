@@ -1,6 +1,7 @@
 #include "EEPROM.h"
-#include <WiFi.h>
+//#include <WiFi.h>
 #include <vector>
+#include <BluetoothSerial.h>
 #define EEPROM_SIZE 1024
 #define LED_CHANNEL0 0
 #define GPIO_DIMMER 16
@@ -8,15 +9,20 @@
 #define TXD0 1
 #define SETTINGS_ADDRESS 0
 
+
 struct Settings{
   char ssid[64];
   char password[64];
 };
-
+Settings settingsFlash;
+const char compileDate[] = __DATE__ " " __TIME__;
 byte duty = 127;
 int freq = 10000;
 byte resolution = 8;
 char* splitChar = ";";
+BluetoothSerial SerialBT;
+char espName[32];
+char pinChar[9];
 
 std::vector<String> splitString(String str, char splitter){
     std::vector<String> result;
@@ -36,73 +42,77 @@ std::vector<String> splitString(String str, char splitter){
     return result;
 }
 
+void callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param){
+  if(event == ESP_SPP_SRV_OPEN_EVT){
+     SerialBT.printf("BT LED DRIVER 0.1 - %s - Karol Weyna\r\n", compileDate); 
+     SerialBT.println("----------- CONFIG --------------------");
+     SerialBT.printf("Name: %s\r\n", espName);
+     SerialBT.printf("FLASH SIZE: %d\r\n", EEPROM.length());
+     SerialBT.printf("SSID: %s PASSWORD: %s\r\n", settingsFlash.ssid, settingsFlash.password);
+     SerialBT.println("---------------------------------------");
+  }
+}
+
 void setup() {
-  Serial.begin(115200, SERIAL_8N1, RXD0, TXD0);
+  uint64_t pin = ((((uint64_t)ESP.getEfuseMac() ^ 0xFFFFFFFFFFFFFFFF) + 2137) % 100000000);
+  String(pin, DEC).toCharArray(pinChar, 9);
+  String("ESP32-"+String(ESP.getEfuseMac(), HEX)).toCharArray(espName, 32);
+  SerialBT.begin(espName);
+  SerialBT.setPin(pinChar);
+  SerialBT.register_callback(callback);
   ledcSetup(LED_CHANNEL0, freq, resolution);
   ledcAttachPin(GPIO_DIMMER, LED_CHANNEL0);
   ledcWrite(LED_CHANNEL0, duty);
   if(!EEPROM.begin(EEPROM_SIZE)){
-    Serial.println("failed to initialise EEPROM");
+    SerialBT.println("failed to initialise EEPROM");
   } else {
-    Serial.print("FLASH SIZE: ");
-    Serial.println(EEPROM.length());
-    Settings settingsFlash;
     EEPROM.get(SETTINGS_ADDRESS, settingsFlash);
-    Serial.println(settingsFlash.ssid);
-    Serial.println(settingsFlash.password);
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(settingsFlash.ssid, settingsFlash.password);
-    Serial.print("Connecting to WiFi ..");
-    while (WiFi.status() != WL_CONNECTED) {
-      Serial.print('.');
-      delay(1000);
-    }
-    Serial.println(WiFi.localIP());
+    //WiFi.mode(WIFI_STA);
+    //WiFi.begin(settingsFlash.ssid, settingsFlash.password);
+    //SerialBT.print("Connecting to WiFi ..");
+    //while (WiFi.status() != WL_CONNECTED) {
+    //  Serial.print('.');
+    //  delay(1000);
+    //}
+    //Serial.println(WiFi.localIP());
   }
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-
-    if(Serial.available() > 0)
+    if(SerialBT.available())
     {
         try {
-          String str = Serial.readStringUntil('\r');
+          String str = SerialBT.readStringUntil('\r');
+          SerialBT.println(String("REC-"+str));
           std::vector<String> splittedString = splitString(str, *splitChar);
-          Serial.print("REC ");
-          Serial.println(str);
-          String command = splittedString[0];
-          
-          if(command.equals("setwifi")){
-              char ssid[64];
-              splittedString[1].toCharArray(ssid, 64);
-              char password[64];
-              splittedString[2].toCharArray(password, 64);
-              Serial.println("Settings Wifi to: ");
-              Serial.print("SSID: ");
-              Serial.println(ssid);
-              Serial.print("PASSWORD: ");
-              Serial.println(password);
-              Settings settings;
-              strcpy(settings.password, password);
-              strcpy(settings.ssid, ssid);
-              Serial.println(settings.ssid);
-              Serial.println(settings.password);
-              EEPROM.put(SETTINGS_ADDRESS, settings);
-              EEPROM.commit();
-          }
-          if(command.equals("setbright")){
-            int x = splittedString[1].toInt();
-            byte p = (byte)((x/100.0f) * 255);
-            duty = p;
-            Serial.print("P=");
-            Serial.println(p);
-            ledcWrite(LED_CHANNEL0, duty);
-          }
-
+          String password = splittedString[0];
+          if(password.equals(String(pinChar))){
+            String command = splittedString[1];
+            if(command.equals("setwifi")){
+                char ssid[64];
+                splittedString[2].toCharArray(ssid, 64);
+                char password[64];
+                splittedString[3].toCharArray(password, 64);
+                Settings settings;
+                strcpy(settings.password, password);
+                strcpy(settings.ssid, ssid);
+                EEPROM.put(SETTINGS_ADDRESS, settings);
+                EEPROM.commit();
+                SerialBT.printf("Settings Wifi - SSID: %s PASSWORD: %s\r\n", ssid, password);
+            }
+            if(command.equals("setbright")){
+              int x = splittedString[2].toInt();
+              byte p = (byte)((x/100.0f) * 255);
+              duty = p;
+              SerialBT.printf("SETBRIGHT - %d RAW(%d)\r\n", x, p);
+              ledcWrite(LED_CHANNEL0, duty);
+            }
+         } else {
+           SerialBT.println("WRONG PASSWORD");
+         }
         } catch (int exc){
-          Serial.println("ERROR READ UNTIL");
-          Serial.println(exc);
+          SerialBT.println("ERROR READ UNTIL");
+          SerialBT.println(exc);
         }
     }
 }
