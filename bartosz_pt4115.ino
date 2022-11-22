@@ -3,7 +3,8 @@
 #include <vector>
 #include <BluetoothSerial.h>
 #include <DS3231.h>
-
+#include <time.h>
+#include <WiFi.h>
 
 #define EEPROM_SIZE 1024
 #define LED_CHANNEL_8000K 0
@@ -40,7 +41,12 @@ struct StartStop{
   byte stopMinuteBlue;
   int dimmSBlue;
 };
-byte maxLevel = 100;
+struct MaxLevels{
+  byte white;
+  byte blue;
+};
+
+
 Settings settingsFlash = {
   .ssid = {'\0'},
   .password = {'\0'}
@@ -57,7 +63,14 @@ StartStop startStop = {
   .stopMinuteBlue = 0,
   .dimmSBlue = 0
 };
+MaxLevels maxLevels = {
+  .white = 0,
+  .blue = 0
+};
+const char* ntpServer = "pool.ntp.org";
 const char compileDate[] = __DATE__ " " __TIME__;
+const long gmtOffset_sec = 3600;
+const int daylightOffset_sec = 3600;
 byte duty = 127;
 int freq = 10000;                                     
 byte resolution = 8;
@@ -66,6 +79,16 @@ BluetoothSerial SerialBT;
 char espName[32];
 char pinChar[9];
 DS3231 myRTC;
+
+void printLocalTime()
+{
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    SerialBT.println("Failed to obtain time");
+    return;
+  }
+  SerialBT.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+}
 
 std::vector<String> splitString(String str, char splitter){
     std::vector<String> result;
@@ -94,7 +117,7 @@ void callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param){
      DateTime currentMoment = RTClib::now();
      SerialBT.printf("BT LED DRIVER 0.1 - %s - Karol Weyna\r\n", compileDate); 
      SerialBT.println("----------- CONFIG --------------------");
-     SerialBT.printf("MAX LEVEL %d\r\n", maxLevel);
+     SerialBT.printf("MAX LEVEL WHITE %d BLUE %d\r\n", maxLevels.white, maxLevels.blue);
      SerialBT.printf("PWM_HZ: %d PWM_RES: %d PWM_MAX: %d\r\n", PWM_FREQ, PWM_RESOLUTION, PWM_RESOLUTION_VALUE);
      SerialBT.printf("%d.%d.%d %d:%d:%d\r\n", currentMoment.day(), currentMoment.month(), currentMoment.year(), currentMoment.hour(), currentMoment.minute(), currentMoment.second());
      SerialBT.printf("START %d:%d STOP %d:%d DIM: %d\r\n", startStop.startHour, startStop.startMinute, startStop.stopHour, startStop.stopMinute, startStop.dimmS);               
@@ -114,16 +137,9 @@ void setup() {
   } else {
     EEPROM.get(SETTINGS_ADDRESS, settingsFlash);
     EEPROM.get(START_STOP_ADDRESS, startStop);
-    EEPROM.get(MAX_LEVEL_ADDRESS, maxLevel);
-    //WiFi.mode(WIFI_STA);
-    //WiFi.begin(settingsFlash.ssid, settingsFlash.password);
-    //SerialBT.print("Connecting to WiFi ..");
-    //while (WiFi.status() != WL_CONNECTED) {
-    //  Serial.print('.');
-    //  delay(1000);
-    //}
-    //Serial.println(WiFi.localIP());
+    EEPROM.get(MAX_LEVEL_ADDRESS, maxLevels);
   }
+  
   uint64_t pin = ((((uint64_t)ESP.getEfuseMac() ^ 0xFFFFFFFFFFFFFFFF) + 2137) % 100000000);
   String(pin, DEC).toCharArray(pinChar, 9);
   String("ESP32-"+String(ESP.getEfuseMac(), HEX)).toCharArray(espName, 32);
@@ -149,6 +165,20 @@ void setup() {
   ledcWrite(LED_CHANNEL_FWS, startDuty);
   ledcWrite(LED_CHANNEL_BLUE, startDuty);
   Wire.begin(I2C_SDA, I2C_SCL);
+
+  // ------------------ SYNC TIME ------------------------------- //
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(settingsFlash.ssid, settingsFlash.password);
+  SerialBT.print("Connecting to WiFi ..");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print('.');
+    delay(1000);
+  }
+  Serial.println(WiFi.localIP());
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  // ----------------------------------------------------------- //
 }
 
 
@@ -191,10 +221,10 @@ void loop() {
         stopMoment = DateTime(currentMoment.year(), currentMoment.month(), currentMoment.day(), startStop.stopHour, startStop.stopMinute, 0);
         stopMomentBlue = DateTime(currentMoment.year(), currentMoment.month(), currentMoment.day(), startStop.stopHourBlue, startStop.stopMinuteBlue, 0);
       }
-      byte percent6000K = setProperLight(currentMoment.unixtime(), startMoment.unixtime(), stopMoment.unixtime(), maxLevel, startStop.dimmS);
-      byte percent8000K = setProperLight(currentMoment.unixtime(), startMoment.unixtime(), stopMoment.unixtime(), maxLevel, startStop.dimmS);
-      byte percentFWS = setProperLight(currentMoment.unixtime(), startMoment.unixtime(), stopMoment.unixtime(), maxLevel, startStop.dimmS);
-      byte percentBlue = setProperLight(currentMoment.unixtime(), startMomentBlue.unixtime(), stopMomentBlue.unixtime(), maxLevel, startStop.dimmSBlue);
+      byte percent6000K = setProperLight(currentMoment.unixtime(), startMoment.unixtime(), stopMoment.unixtime(), maxLevels.white, startStop.dimmS);
+      byte percent8000K = setProperLight(currentMoment.unixtime(), startMoment.unixtime(), stopMoment.unixtime(), maxLevels.white, startStop.dimmS);
+      byte percentFWS = setProperLight(currentMoment.unixtime(), startMoment.unixtime(), stopMoment.unixtime(), maxLevels.white, startStop.dimmS);
+      byte percentBlue = setProperLight(currentMoment.unixtime(), startMomentBlue.unixtime(), stopMomentBlue.unixtime(), maxLevels.blue, startStop.dimmSBlue);
       int duty6000K = convertPercentToPWMValue(percent6000K);
       int duty8000K = convertPercentToPWMValue(percent8000K);
       int dutyFWS = convertPercentToPWMValue(percentFWS);
@@ -280,11 +310,13 @@ void loop() {
               SerialBT.printf("START BLUE %d:%d STOP %d:%d\r\n", startHourBlue, startMinuteBlue, stopHourBlue, stopMinuteBlue);                          
             }
             if(command.equals("maxlevel")){
-              int maxL = splittedString[2].toInt();
-              maxLevel = maxL;
-              EEPROM.put(MAX_LEVEL_ADDRESS, maxLevel);
+              int maxWhite = splittedString[2].toInt();
+              int maxBlue = splittedString[3].toInt();
+              maxLevels.white = maxWhite;
+              maxLevels.blue = maxBlue;
+              EEPROM.put(MAX_LEVEL_ADDRESS, maxLevels);
               EEPROM.commit();
-              SerialBT.printf("MAX LEVEL SET %d\r\n", maxL);                          
+              SerialBT.printf("MAX LEVEL SET WHITE %d BLUE \r\n", maxWhite, maxBlue);                          
             }
          } else {
            SerialBT.println("WRONG PASSWORD");
