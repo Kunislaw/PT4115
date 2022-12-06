@@ -16,6 +16,7 @@
 #define GPIO_DIMMER_FWS 4
 #define GPIO_DIMMER_BLUE 0
 #define GPIO_RELAY 15
+#define GPIO_RELAY2 2
 #define PWM_FREQ 10000
 #define PWM_RESOLUTION 12
 #define PWM_RESOLUTION_VALUE 4095
@@ -161,20 +162,23 @@ void setup() {
   ledcSetup(LED_CHANNEL_BLUE, PWM_FREQ, PWM_RESOLUTION);
   ledcAttachPin(GPIO_DIMMER_BLUE, LED_CHANNEL_BLUE);
   //------------------------------------------------//
-  byte startDuty = convertPercentToPWMValue(10);
+  byte startDuty = convertPercentToPWMValue(5);
   ledcWrite(LED_CHANNEL_8000K, startDuty);
   ledcWrite(LED_CHANNEL_6000K, startDuty);
   ledcWrite(LED_CHANNEL_FWS, startDuty);
   ledcWrite(LED_CHANNEL_BLUE, startDuty);
   pinMode(GPIO_RELAY, OUTPUT);
+  pinMode(GPIO_RELAY2, OUTPUT);
   digitalWrite(GPIO_RELAY, HIGH);
+  digitalWrite(GPIO_RELAY2, HIGH);
   Wire.begin(I2C_SDA, I2C_SCL);
 
   // ------------------ SYNC TIME ------------------------------- //
   WiFi.mode(WIFI_STA);
   WiFi.begin(settingsFlash.ssid, settingsFlash.password);
+  Serial.printf("SSID: %s PASSWORD: %s\r\n", settingsFlash.ssid, settingsFlash.password);
   Serial.println("Connecting to WiFi ..");
-  while(millis() < 5000){
+  while(millis() < 5000 && WiFi.status() != WL_CONNECTED){
     Serial.println("...");
     delay(500);
   }
@@ -229,8 +233,9 @@ void setup() {
       Serial.println("Failed to obtain time");
     }
     WiFi.disconnect(true);
+  } else {
+    Serial.println("Failed to connect WiFi");
   }
-  WiFi.mode(WIFI_OFF);
   // ----------------------------------------------------------- //
 }
 
@@ -281,6 +286,7 @@ void loop() {
       byte percentFWS = setProperLight(currentMoment.unixtime(), startMoment.unixtime(), stopMoment.unixtime(), maxLevels.white, startStop.dimmS);
       byte percentBlue = setProperLight(currentMoment.unixtime(), startMomentBlue.unixtime(), stopMomentBlue.unixtime(), maxLevels.blue, startStop.dimmSBlue);
       long secondsFromStart = millis()/1000;
+      SerialBT.printf("SECONDS STARTS %d %d\r\n", millis(), secondsFromStart);
       if(secondsFromStart <= percent6000K){
         percent6000K = secondsFromStart;
       }
@@ -384,7 +390,7 @@ void loop() {
               maxLevels.blue = maxBlue;
               EEPROM.put(MAX_LEVEL_ADDRESS, maxLevels);
               EEPROM.commit();
-              SerialBT.printf("MAX LEVEL SET WHITE %d BLUE \r\n", maxWhite, maxBlue);                          
+              SerialBT.printf("MAX LEVEL SET WHITE %d BLUE %d\r\n", maxLevels.white, maxLevels.blue);                          
             }
             if(command.equals("setntp")){
                 splittedString[2].toCharArray(timeSettings.ntpServer, 64);
